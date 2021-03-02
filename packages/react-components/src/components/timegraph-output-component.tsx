@@ -1,4 +1,7 @@
+import { signalManager, Signals } from '@trace-viewer/base/lib/signal-manager';
+import hash from '@trace-viewer/base/lib/utils/value-hash';
 import * as React from 'react';
+import ReactTooltip from 'react-tooltip';
 import { TimeGraphRowElement, TimeGraphRowElementStyle } from 'timeline-chart/lib/components/time-graph-row-element';
 import { TimeGraphChart, TimeGraphChartProviders } from 'timeline-chart/lib/layer/time-graph-chart';
 import { TimeGraphChartCursors } from 'timeline-chart/lib/layer/time-graph-chart-cursors';
@@ -9,18 +12,16 @@ import { TimelineChart } from 'timeline-chart/lib/time-graph-model';
 import { TimeGraphRowController } from 'timeline-chart/lib/time-graph-row-controller';
 import { QueryHelper } from 'tsp-typescript-client/lib/models/query/query-helper';
 import { ResponseStatus } from 'tsp-typescript-client/lib/models/response/responses';
+import { OutputElementStyle } from 'tsp-typescript-client/lib/models/styles';
 import { TimeGraphEntry } from 'tsp-typescript-client/lib/models/timegraph';
-import { signalManager, Signals } from '@trace-viewer/base/lib/signal-manager';
 import { AbstractOutputProps, AbstractOutputState } from './abstract-output-component';
 import { AbstractTreeOutputComponent } from './abstract-tree-output-component';
 import { StyleProvider } from './data-providers/style-provider';
 import { TspDataProvider } from './data-providers/tsp-data-provider';
-import { ReactTimeGraphContainer } from './utils/timegraph-container-component';
-import { OutputElementStyle } from 'tsp-typescript-client/lib/models/styles';
-import { EntryTree } from './utils/filtrer-tree/entry-tree';
-import { listToTree, getAllExpandedNodeIds } from './utils/filtrer-tree/utils';
-import hash from '@trace-viewer/base/lib/utils/value-hash';
 import ColumnHeader from './utils/filtrer-tree/column-header';
+import { EntryTree } from './utils/filtrer-tree/entry-tree';
+import { getAllExpandedNodeIds, listToTree } from './utils/filtrer-tree/utils';
+import { ReactTimeGraphContainer } from './utils/timegraph-container-component';
 
 type TimegraphOutputProps = AbstractOutputProps & {
     addWidgetResizeHandler: (handler: () => void) => void;
@@ -45,6 +46,8 @@ export class TimegraphOutputComponent extends AbstractTreeOutputComponent<Timegr
     private styleMap = new Map<string, TimeGraphRowElementStyle>();
 
     private selectedElement: TimeGraphRowElement | undefined;
+    private tooltipElement: TimeGraphRowElement | undefined;
+    private tooltipInfo: {[key: string]: string} | undefined;
 
     constructor(props: TimegraphOutputProps) {
         super(props);
@@ -89,6 +92,16 @@ export class TimegraphOutputComponent extends AbstractTreeOutputComponent<Timegr
                 this.selectedElement = undefined;
             }
             this.onElementSelected(this.selectedElement);
+        });
+        this.chartLayer.registerRowElementMouseInteractions({
+            mouseover: el => {
+                this.tooltipElement = el;
+                this.fetchTooltip(el);
+            },
+            mouseout: () => {
+                this.tooltipElement = undefined;
+                this.tooltipInfo = undefined;
+            }
         });
         signalManager().on(Signals.SELECTION_CHANGED, ({ payload }) => this.onSelectionChanged(payload));
     }
@@ -197,11 +210,73 @@ export class TimegraphOutputComponent extends AbstractTreeOutputComponent<Timegr
     renderChart(): React.ReactNode {
         return <React.Fragment>
             {this.state.outputStatus === ResponseStatus.COMPLETED ?
-                <div id='timegraph-main' className='ps__child--consume' onWheel={ev => { ev.preventDefault(); ev.stopPropagation(); }} style={{ height: this.props.style.height }} >
+                <div id='timegraph-main' className='ps__child--consume' onWheel={ev => { ev.preventDefault(); ev.stopPropagation(); }} style={{ height: this.props.style.height }}
+                        data-tip='' data-for="timegraph-tooltip">
                     {this.renderTimeGraphContent()}
+                    <ReactTooltip
+                        className="react-tooltip"
+                        id="timegraph-tooltip"
+                        delayShow={500}
+                        clickable={true}
+                        type='light'
+                        html={true}
+                        overridePosition={ ({ left, top }, currentEvent, currentTarget, refNode) => {
+                            const d = document.documentElement;
+                            if (refNode) {
+                                left = Math.min(d.clientWidth - refNode.clientWidth, left);
+                                top = Math.min(d.clientHeight - refNode.clientHeight, top);
+                            }
+                            left = Math.max(0, left);
+                            top = Math.max(0, top);
+                            return { top, left };
+                        } }
+                        getContent={() => this.getTooltip()}
+                    />
                 </div> :
                 'Analysis running...'}
         </React.Fragment>;
+    }
+
+    private getTooltip() {
+        const element = this.tooltipElement;
+        if (element && element.model) {
+            const elementRange = element.model.range;
+            const offset = this.props.viewRange.getOffset();
+            let start: string | undefined;
+            let end: string | undefined;
+            if (this.props.unitController.numberTranslator) {
+                start = this.props.unitController.numberTranslator(elementRange.start);
+                end = this.props.unitController.numberTranslator(elementRange.end);
+            }
+            start = start ? start : (elementRange.start + (offset ? offset : 0)).toString();
+            end = end ? end : (elementRange.end + (offset ? offset : 0)).toString();
+            let tooltip = '<table>' +
+            this.tooltipRow('Label', element.model.label) +
+            this.tooltipRow('Start time', start) +
+            this.tooltipRow('End time', end) +
+            this.tooltipRow('Row', element.row.model.name);
+            if (this.tooltipInfo) {
+                Object.entries(this.tooltipInfo).forEach(([k, v]) => tooltip += this.tooltipRow(k, v));
+            }
+            tooltip += '</table>';
+            return tooltip;
+        }
+        return undefined;
+    }
+
+    private tooltipRow(key: string, value: string) {
+        return '<tr><td style="text-align:left">' + key + '</td><td style="text-align:left">' + value + '</td></tr>';
+    }
+
+    private async fetchTooltip(element: TimeGraphRowElement) {
+        const elementRange = element.model.range;
+        const offset = this.props.viewRange.getOffset();
+        const time = Math.round(elementRange.start + (offset ? offset : 0));
+        const tooltipResponse = await this.props.tspClient.fetchTimeGraphToolTip(
+            this.props.traceId, this.props.outputDescriptor.id, time, element.row.model.id.toString());
+        if (this.tooltipElement === element) {
+            this.tooltipInfo = tooltipResponse.getModel()?.model;
+        }
     }
 
     private renderTimeGraphContent() {
