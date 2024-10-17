@@ -4,8 +4,8 @@ import { TableRow } from './table-row';
 
 interface TableBodyProps {
     nodes: TreeNode[];
-    selectedNode?: number;
-    multiSelectedNodes?: number[];
+    selectedRow?: number;
+    multiSelectedRows?: number[];
     collapsedNodes: number[];
     isCheckable: boolean;
     isClosable: boolean;
@@ -34,7 +34,7 @@ export class TableBody extends React.Component<TableBodyProps> {
         if (!this.props.nodes) {
             return undefined;
         }
-
+        console.log('TableBody.render() selectedRow:'+this.props.selectedRow+' multiSelectedRows:'+this.props.multiSelectedRows);
         return <tbody>{this.renderRows()}</tbody>;
     }
 }
